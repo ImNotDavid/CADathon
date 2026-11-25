@@ -1,0 +1,21 @@
+services:
+  speedcad:
+    build: .
+    restart: unless-stopped
+    environment:
+      ADMIN_KEY: ${ADMIN_KEY:?Set ADMIN_KEY in a .env file next to this compose file}
+      COOLDOWN: ${COOLDOWN:-15}
+    volumes:
+      - speedcad-data:/data              # SQLite database and uploaded PDFs survive rebuilds
+    # no "ports:" - the Cloudflare tunnel reaches the container over shared-tunnel
+    networks:
+      default: {}
+      shared-tunnel:
+        aliases: [icrs-speedcad]         # tunnel Service URL: http://icrs-speedcad:3000
+
+volumes:
+  speedcad-data:
+
+networks:
+  shared-tunnel:
+    external: true                       # already exists on the server; never create or delete it

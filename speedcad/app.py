@@ -1,4 +1,8 @@
-"""ICRS Speed CAD Competition server.  Run:  ADMIN_KEY=secret python app.py  (port 3000)"""
+"""ICRS Speed CAD Competition server.
+
+Local:   ADMIN_KEY=secret python app.py          (Flask dev server, port 3000)
+Docker:  see README.md (waitress behind the Cloudflare tunnel)
+"""
 import json, os, secrets, sqlite3, threading, time
 from flask import Flask, jsonify, request, send_from_directory, abort, g
 
@@ -6,12 +10,15 @@ PORT = int(os.environ.get("PORT", 3000))
 KEY = os.environ.get("ADMIN_KEY", "admin")
 COOLDOWN = float(os.environ.get("COOLDOWN", 15))  # seconds between wrong guesses, per name per part
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(HERE, "data")
+DATA = os.environ.get("DATA_DIR") or os.path.join(HERE, "data")
 PDFS = os.path.join(DATA, "pdf")
 os.makedirs(PDFS, exist_ok=True)
+MAX_UPLOAD_MB = 50  # Cloudflare refuses bodies over 100 MB; stay well under so our own message is shown
 
 app = Flask(__name__, static_folder=None)
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+# Behind the Cloudflare tunnel, waitress itself trusts the X-Forwarded-* headers (see Dockerfile CMD), so
+# request.is_secure is true there and the session cookie is marked Secure.
 lock = threading.RLock()
 db = sqlite3.connect(os.path.join(DATA, "cad.db"), check_same_thread=False, isolation_level=None)
 db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
@@ -35,8 +42,14 @@ def _session():
 @app.after_request
 def _set_cookie(resp):
     if getattr(g, "new_sid", False):
-        resp.set_cookie(COOKIE, g.sid, max_age=60 * 60 * 24 * 30, httponly=True, samesite="Lax")
+        resp.set_cookie(COOKIE, g.sid, max_age=60 * 60 * 24 * 30, httponly=True, samesite="Lax",
+                        secure=request.is_secure)
     return resp
+
+
+@app.errorhandler(413)
+def _413(e):
+    return jsonify(error=f"file too large (max {MAX_UPLOAD_MB} MB)"), 413
 
 
 def me_player():
