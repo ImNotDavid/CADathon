@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICRS Speed CAD Competition</title>
+<style>
+  body{font-family:monospace;max-width:900px;margin:0 auto;padding:16px;color:#000;background:#fff}
+  h1{margin:0 0 8px;font-size:20px} h2{font-size:16px;margin:0 0 8px}
+  .box{border:2px solid #000;padding:12px;margin-bottom:16px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  table{border-collapse:collapse;width:100%;margin-bottom:16px}
+  th,td{border:1px solid #000;padding:4px;text-align:left}
+  #clock{font-size:72px;font-weight:bold;line-height:1}
+  .round{border:1px solid #000;padding:8px;margin-bottom:8px}
+  .sel{background:#eee}
+  iframe{width:100%;height:85vh;min-height:500px;border:1px solid #000;background:#fff}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<h1>ICRS Speed CAD Competition</h1>
+<div style="margin-bottom:8px"><span id="roundLabel"></span> <button id="adminBtn" style="margin-left:12px">Organiser</button></div>
+<div class="box"><div id="status">Connecting...</div><div id="clock">--:--</div></div>
+
+<div id="admin" class="box" hidden>
+  <h2>Organiser</h2>
+  <div id="keyRow">Admin key <input id="key" type="password" style="padding:4px"> <span id="keyMsg"></span></div>
+  <div id="adminBody" hidden>
+    <div class="row" style="margin-bottom:12px">
+      <button data-act="start" style="padding:8px 12px">Start current round</button>
+      <button data-act="stop" style="padding:8px 12px">Stop</button>
+      <button data-act="reset" data-confirm="Reset this round's timer and remove the points scored in it?" style="padding:8px 12px">Reset round (removes its points)</button>
+      <button data-act="resetScores" data-confirm="Reset ALL scores to zero? Rounds, parts, PDFs and names are kept." style="padding:8px 12px">Reset all scores</button>
+    </div>
+    <div style="margin-bottom:8px"><b>Rounds</b> (click to select)</div>
+    <div id="rounds"></div>
+    <div class="row">
+      <button data-act="addRound" style="padding:6px 12px">Add round</button>
+      <button data-act="clearAll" data-confirm="Delete ALL rounds, parts, answers, PDFs, scores and registered names? This cannot be undone." style="padding:6px 12px">Clear everything</button>
+    </div>
+    <div style="margin-top:8px"><b>Registered competitors</b> (Release lets someone re-register from another browser)</div>
+    <div id="players"></div>
+    <div id="adminMsg" style="margin-top:8px;min-height:18px"></div>
+  </div>
+</div>
+
+<h2>Submit mass</h2>
+<form id="joinForm" class="row" style="margin-bottom:4px" hidden>
+  <input id="name" placeholder="Your name" style="padding:6px" required>
+  <button type="submit" style="padding:6px 12px">Register</button>
+  <span>(your name is locked to this browser once registered)</span>
+</form>
+<form id="form" class="row" style="margin-bottom:4px" hidden>
+  <span>You are <b id="meName"></b></span>
+  <span id="partLabel"></span>
+  <input id="mass" placeholder="Mass (g)" style="padding:6px;width:110px" required>
+  <button type="submit" style="padding:6px 12px">Submit</button>
+</form>
+<div id="message" style="margin-bottom:16px;min-height:18px"></div>
+
+<h2>Scores (all rounds)</h2>
+<div style="margin-bottom:4px">Easy = 1 point, Medium = 2, Hard = 3. Ties go to whoever reached the score first.</div>
+<table><thead><tr><th>#</th><th>Name</th><th>Points</th><th>Parts</th><th>Reached at</th></tr></thead><tbody id="board"></tbody></table>
+
+<h2>Your drawing</h2>
+<div id="drawNote" style="margin-bottom:8px"></div>
+<div id="drawings"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let pub = null, off = 0, adm = null, showAdmin = false, key = '';
+try { key = localStorage.getItem('cad_key') || ''; } catch (e) {}
+$('key').value = key;
+
+const fmt = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function tick() {
+  const R = pub && pub.round; if (!R) return;
+  const dur = R.dur * 60000; let clock, st;
+  if (!R.startAt) { clock = fmt(dur); st = 'Waiting for start'; }
+  else { const el = (R.stopAt || Date.now() + off) - R.startAt; clock = fmt(dur - el); st = (R.stopAt || el >= dur) ? 'Time up' : 'Running'; }
+  $('clock').textContent = clock; $('status').textContent = st;
+}
+setInterval(tick, 250);
+
+function renderPub() {
+  const R = pub.round;
+  $('roundLabel').textContent = `${R.name} (${R.no}/${R.total})`;
+  const clockTime = ms => new Date(ms - off).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  $('board').innerHTML = pub.board.map((u, i) =>
+    `<tr><td>${i + 1}</td><td>${esc(u.name)}</td><td>${u.points}</td><td>${u.parts}</td><td>${clockTime(u.at)}</td></tr>`).join('');
+  // only the part this competitor is currently on is ever sent by the server
+  const me = pub.me; let note = '', head = '', src = '';
+  $('joinForm').hidden = !!me; $('form').hidden = !me;
+  if (me) $('meName').textContent = me.name;
+  const partText = me && me.part ? `Part ${me.part} of ${R.nParts} (${me.diffName}, ${me.diff} pt${me.diff === 1 ? '' : 's'})` : '';
+  if (!me) note = 'Register your name above to see your drawing.';
+  else if (R.status === 'waiting') note = 'Your drawing appears when the round starts.';
+  else if (!me.part) note = 'You have completed every part in this round.';
+  else { head = partText; src = me.pdf || ''; if (!src) note = 'No drawing uploaded for this part yet.'; }
+  $('drawNote').textContent = note;
+  $('partLabel').textContent = partText;
+  const sig = head + '|' + src;
+  if ($('drawings').dataset.sig !== sig) {  // only rebuild when changed, so the PDF doesn't reload every poll
+    $('drawings').dataset.sig = sig;
+    $('drawings').innerHTML = head ? `<div style="margin-bottom:16px"><div style="font-weight:bold">${head} ${src ? `<a href="${src}" target="_blank">[open full size]</a>` : ''}</div>${src ? `<iframe src="${src}#toolbar=0&navpanes=0&scrollbar=0&view=Fit"></iframe>` : ''}</div>` : '';
+  }
+  tick();
+}
+
+let pollSeq = 0;
+async function poll() {
+  const seq = ++pollSeq;
+  try {
+    const d = await (await fetch('/api/state')).json();  // identity comes from this browser's session cookie
+    if (seq === pollSeq) { pub = d; off = d.now - Date.now(); renderPub(); }
+  } catch (e) {}
+  if (showAdmin && key) loadAdmin();
+}
+setInterval(poll, 1500); poll();
+
+// ---- organiser ----
+const H = () => ({'x-admin-key': key});
+let admSeq = 0, admApplied = 0;  // drop responses that started before a newer one was applied
+async function loadAdmin() {
+  const seq = ++admSeq;
+  try {
+    const r = await fetch('/api/admin', {headers: H()});
+    if (seq < admApplied) return;
+    if (r.status === 401) { adm = null; $('keyMsg').textContent = 'Wrong key'; return renderAdmin(); }
+    const d = await r.json(); if (seq < admApplied) return;
+    admApplied = seq; adm = d; $('keyMsg').textContent = '';
+    try { localStorage.setItem('cad_key', key); } catch (e) {}
+    renderAdmin();
+  } catch (e) {}
+}
+async function act(o) {
+  const seq = ++admSeq;
+  try {
+    const r = await fetch('/api/admin', {method: 'POST', headers: H(), body: JSON.stringify(o)});
+    if (r.ok) { const d = await r.json(); if (seq >= admApplied) { admApplied = seq; adm = d; renderAdmin(); } }
+    else $('adminMsg').textContent = r.status === 401 ? 'Wrong key' : 'Action failed (' + r.status + ')';
+  } catch (e) { $('adminMsg').textContent = 'Server unreachable.'; }
+  poll();
+}
+async function upload(id, part, f, label) {
+  if (!f) return;
+  label.textContent = '[uploading...]';
+  try {
+    const r = await fetch(`/api/admin/pdf?id=${encodeURIComponent(id)}&part=${part}`, {method: 'POST', headers: H(), body: f});
+    const d = await r.json().catch(() => ({}));
+    $('adminMsg').textContent = r.ok ? `Uploaded ${f.name} to part ${part + 1}.` : 'Upload failed: ' + (d.error || r.status);
+  } catch (e) { $('adminMsg').textContent = 'Upload failed: server unreachable.'; }
+  admSig = ''; loadAdmin();
+}
+let admSig = '';
+function renderAdmin() {
+  $('adminBody').hidden = !adm; $('keyRow').hidden = !!adm;
+  if (!adm) { admSig = ''; return; }
+  const psig = JSON.stringify(adm.players);
+  if ($('players').dataset.sig !== psig) {
+    $('players').dataset.sig = psig;
+    $('players').innerHTML = adm.players.length ? adm.players.map(p =>
+      `<div class="row" style="margin-top:4px">${esc(p.disp)} <button data-release="${esc(p.name)}">Release</button></div>`).join('') : 'none';
+  }
+  // only rebuild when something changed, and never while the organiser is typing in a box
+  const sig = JSON.stringify([adm.rounds, adm.cur]);
+  if (sig === admSig) return;
+  const ae = document.activeElement;
+  if (ae && ae.tagName === 'INPUT' && ae.type !== 'file' && $('rounds').contains(ae)) return;
+  admSig = sig;
+  $('rounds').innerHTML = adm.rounds.map((r, ri) => `
+    <div class="round ${ri === adm.cur ? 'sel' : ''}" data-id="${r.id}">
+      <div class="row">
+        <button data-a="select">${ri === adm.cur ? 'Selected' : 'Select'}</button>
+        <input data-f="name" value="${esc(r.name)}" style="padding:4px;width:140px">
+        Min <input data-f="dur" value="${r.dur}" style="padding:4px;width:50px">
+        Tol % <input data-f="tol" value="${r.tol}" style="padding:4px;width:50px">
+        <button data-a="delRound">Delete round</button>
+      </div>
+      ${r.parts.map((p, i) => `
+      <div class="row" style="margin-top:6px" data-part="${i}">Part ${i + 1}
+        <input type="file" accept="application/pdf,.pdf" data-a="upload"> <span class="has">${p.pdf ? `<a href="/pdf/${p.pdf}" target="_blank">[pdf set]</a>` : '[no pdf]'}</span>
+        Mass (g) <input data-f="ans" value="${esc(p.ans)}" style="padding:4px;width:90px">
+        <select data-f="diff">${[1, 2, 3].map(d => `<option value="${d}" ${p.diff === d ? 'selected' : ''}>${adm.diffs[d]} (${d} pt${d === 1 ? '' : 's'})</option>`).join('')}</select>
+        <button data-a="delPart">Remove</button>
+      </div>`).join('')}
+      <button data-a="addPart" style="margin-top:6px">Add part</button>
+    </div>`).join('');
+  // bind uploads on the input itself (with id/part captured) so a redraw can never lose the event
+  $('rounds').querySelectorAll('input[type=file]').forEach(inp => {
+    const id = inp.closest('.round').dataset.id, part = +inp.closest('[data-part]').dataset.part;
+    const label = inp.parentElement.querySelector('.has');
+    inp.addEventListener('change', () => upload(id, part, inp.files[0], label));
+  });
+}
+$('rounds').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const a = b.dataset.a; if (!a) return;
+  if (a === 'delRound' && !confirm('Delete this round, its parts, PDFs and scores?')) return;
+  if (a === 'delPart' && !confirm('Remove this part and its PDF?')) return;
+  const id = b.closest('.round').dataset.id, pt = b.closest('[data-part]');
+  act({action: a, id, part: pt ? +pt.dataset.part : undefined});
+});
+$('rounds').addEventListener('change', e => {
+  const f = e.target.dataset.f; if (!f) return;  // file inputs handled above
+  const id = e.target.closest('.round').dataset.id, pt = e.target.closest('[data-part]');
+  e.target.blur(); admSig = '';
+  if (f === 'ans') act({action: 'setAns', id, part: +pt.dataset.part, ans: e.target.value});
+  else if (f === 'diff') act({action: 'setDiff', id, part: +pt.dataset.part, diff: e.target.value});
+  else act({action: 'setRound', id, [f]: e.target.value});
+});
+document.querySelectorAll('#adminBody button[data-act]').forEach(b =>
+  b.addEventListener('click', () => { if (!b.dataset.confirm || confirm(b.dataset.confirm)) act({action: b.dataset.act}); }));
+$('players').addEventListener('click', e => {
+  const n = e.target.dataset.release;
+  if (n && confirm(`Release "${n}"? They can then register again from any browser.`)) act({action: 'release', name: n});
+});
+$('key').addEventListener('change', e => { key = e.target.value; loadAdmin(); });
+$('adminBtn').addEventListener('click', () => {
+  showAdmin = !showAdmin; $('admin').hidden = !showAdmin;
+  $('adminBtn').textContent = showAdmin ? 'Hide organiser' : 'Organiser';
+  if (showAdmin && key) loadAdmin();
+});
+
+// ---- submit ----
+$('joinForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  try {
+    const r = await (await fetch('/api/join', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: $('name').value})})).json();
+    $('message').textContent = r.ok ? `Registered as ${r.name}.` : r.msg;
+    poll();
+  } catch (x) { $('message').textContent = 'Server unreachable.'; }
+});
+$('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  try {
+    const r = await (await fetch('/api/submit', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mass: $('mass').value})})).json();
+    $('message').textContent = r.msg; $('mass').value = ''; poll();
+  } catch (x) { $('message').textContent = 'Server unreachable.'; }
+});
+</script>
+</body>
+</html>

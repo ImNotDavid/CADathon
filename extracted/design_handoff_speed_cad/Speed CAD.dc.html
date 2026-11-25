@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="font-family:monospace;max-width:900px;margin:0 auto;padding:16px;color:#000;background:#fff">
+<h1 style="margin:0 0 8px;font-size:20px">ICRS Speed CAD Competition</h1>
+<div style="margin-bottom:8px">{{ roundLabel }} <button onClick="{{ toggleAdmin }}" style="margin-left:12px">{{ adminBtn }}</button></div>
+<div style="border:2px solid #000;padding:12px;margin-bottom:16px">
+<div>{{ statusText }}</div><div style="font-size:72px;font-weight:bold;line-height:1">{{ clock }}</div></div>
+
+<sc-if value="{{ showAdmin }}" hint-placeholder-val="{{ false }}">
+<div style="border:2px solid #000;padding:12px;margin-bottom:16px">
+<h2 style="font-size:16px;margin:0 0 8px">Organiser</h2>
+<sc-if value="{{ needKey }}" hint-placeholder-val="{{ false }}">
+<div>Admin key <input type="password" value="{{ key }}" onChange="{{ setKey }}" style="padding:4px"/> {{ keyMsg }}</div></sc-if>
+<sc-if value="{{ authed }}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+<button onClick="{{ start }}" style="padding:8px 12px">Start current round</button>
+<button onClick="{{ stop }}" style="padding:8px 12px">Stop</button>
+<button onClick="{{ reset }}" style="padding:8px 12px">Reset round (clears its scores)</button>
+<button onClick="{{ eliminate }}" style="padding:8px 12px">Eliminate bottom half</button>
+</div>
+<div style="margin-bottom:8px"><b>Rounds</b> (click to select)</div>
+<sc-for list="{{ rounds }}" as="r" hint-placeholder-count="1">
+<div style="border:1px solid #000;padding:8px;margin-bottom:8px;background:{{ r.bg }}">
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+<button onClick="{{ r.select }}">{{ r.sel }}</button>
+<input value="{{ r.name }}" onChange="{{ r.setName }}" style="padding:4px;width:140px"/>
+Min <input value="{{ r.dur }}" onChange="{{ r.setDur }}" style="padding:4px;width:50px"/>
+Tol % <input value="{{ r.tol }}" onChange="{{ r.setTol }}" style="padding:4px;width:50px"/>
+<button onClick="{{ r.remove }}">Delete round</button></div>
+<sc-for list="{{ r.parts }}" as="p" hint-placeholder-count="1">
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">Part {{ p.n }}
+<input type="file" accept="image/*,.pdf" onChange="{{ p.upload }}"/> {{ p.has }}
+Mass (g) <input value="{{ p.ans }}" onChange="{{ p.setAns }}" style="padding:4px;width:90px"/>
+<button onClick="{{ p.remove }}">Remove</button></div>
+</sc-for>
+<button onClick="{{ r.addPart }}" style="margin-top:6px">Add part</button>
+</div>
+</sc-for>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><button onClick="{{ addRound }}" style="padding:6px 12px">Add round</button>
+<button onClick="{{ clearAll }}" style="padding:6px 12px">Clear everything</button></div>
+<div style="margin-top:8px">Eliminated: {{ outList }}</div>
+</sc-if>
+</div>
+</sc-if>
+
+<h2 style="font-size:16px">Submit mass</h2>
+<form onSubmit="{{ submit }}" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+<input placeholder="Your name" value="{{ name }}" onChange="{{ setName }}" style="padding:6px"/>
+<input placeholder="Part #" value="{{ part }}" onChange="{{ setPart }}" style="padding:6px;width:70px"/>
+<input placeholder="Mass (g)" value="{{ mass }}" onChange="{{ setMass }}" style="padding:6px;width:110px"/>
+<button type="submit" style="padding:6px 12px">Submit</button>
+</form>
+<div style="margin-bottom:16px;min-height:18px">{{ message }}</div>
+
+<h2 style="font-size:16px">Scores</h2>
+<table style="border-collapse:collapse;width:100%;margin-bottom:16px">
+<tr style="text-align:left"><th style="border:1px solid #000;padding:4px">#</th><th style="border:1px solid #000;padding:4px">Name</th><th style="border:1px solid #000;padding:4px">Parts</th><th style="border:1px solid #000;padding:4px">Last correct (mm:ss)</th></tr>
+<sc-for list="{{ board }}" as="r" hint-placeholder-count="3">
+<tr style="color:{{ r.color }}"><td style="border:1px solid #000;padding:4px">{{ r.rank }}</td><td style="border:1px solid #000;padding:4px">{{ r.name }}</td><td style="border:1px solid #000;padding:4px">{{ r.parts }}</td><td style="border:1px solid #000;padding:4px">{{ r.time }}</td></tr>
+</sc-for>
+</table>
+
+<h2 style="font-size:16px">Drawings</h2>
+<div style="margin-bottom:8px">{{ drawNote }}</div>
+<sc-for list="{{ drawings }}" as="d" hint-placeholder-count="1">
+<div style="margin-bottom:16px"><div style="font-weight:bold">Part {{ d.n }}</div>
+<sc-if value="{{ d.src }}" hint-placeholder-val="{{ false }}"><a href="{{ d.src }}" target="_blank"><img src="{{ d.src }}" style="max-width:100%;border:1px solid #000"/></a></sc-if></div>
+</sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { name:'', part:'', mass:'', message:'', pub:null, off:0, now:Date.now(), showAdmin:false, key:localStorage.getItem('cad_key')||'', adm:null, keyMsg:'' };
+  componentDidMount(){
+    this.t=setInterval(()=>this.setState({now:Date.now()}),250);
+    this.poll(); this.p=setInterval(()=>this.poll(),1500);
+  }
+  componentWillUnmount(){ clearInterval(this.t); clearInterval(this.p); }
+  async poll(){
+    try{ const s=await (await fetch('/api/state')).json(); this.setState({pub:s,off:s.now-Date.now()}); }catch(e){}
+    if(this.state.showAdmin&&this.state.key) this.loadAdmin();
+  }
+  async loadAdmin(){
+    try{ const r=await fetch('/api/admin',{headers:{'x-admin-key':this.state.key}});
+      if(r.status===401) return this.setState({adm:null,keyMsg:'Wrong key'});
+      this.setState({adm:await r.json(),keyMsg:''}); localStorage.setItem('cad_key',this.state.key); }catch(e){}
+  }
+  async act(o){
+    const r=await fetch('/api/admin',{method:'POST',headers:{'x-admin-key':this.state.key},body:JSON.stringify(o)});
+    if(r.ok) this.setState({adm:await r.json()}); this.poll();
+  }
+  async upload(id,i,f){
+    if(!f) return;
+    await fetch('/api/admin/img?id='+id+'&part='+i+'&f='+encodeURIComponent(f.name),{method:'POST',headers:{'x-admin-key':this.state.key},body:f});
+    this.loadAdmin();
+  }
+  fmt(ms){ const s=Math.max(0,Math.ceil(ms/1000)); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); }
+  renderVals(){
+    const {pub,off,now,adm}=this.state, R=pub&&pub.round;
+    const t=now+off; let clock='--:--', st='Connecting...';
+    if(R){
+      const dur=R.dur*60000;
+      if(!R.startAt){ clock=this.fmt(dur); st='Waiting for start'; }
+      else { const el=(R.stopAt||t)-R.startAt; const done=R.stopAt||el>=dur; clock=this.fmt(dur-el); st=done?'Time up':'Running'; }
+    }
+    const board=pub?pub.board.map((u,i)=>({rank:i+1,name:u.name+(u.out?' (eliminated)':''),parts:u.parts,time:this.fmt(u.t),color:u.out?'#777':'#000'})):[];
+    const drawings=R?Array.from({length:R.nParts},(_,i)=>({n:i+1,src:R.imgs[i]||''})):[];
+    const rounds=adm?adm.rounds.map((r,ri)=>({
+      bg:ri===adm.cur?'#eee':'#fff', sel:ri===adm.cur?'Selected':'Select', name:r.name, dur:r.dur, tol:r.tol,
+      select:()=>this.act({action:'select',id:r.id}), remove:()=>this.act({action:'delRound',id:r.id}),
+      setName:e=>this.act({action:'setRound',id:r.id,name:e.target.value}),
+      setDur:e=>this.act({action:'setRound',id:r.id,dur:e.target.value}),
+      setTol:e=>this.act({action:'setRound',id:r.id,tol:e.target.value}),
+      addPart:()=>this.act({action:'addPart',id:r.id}),
+      parts:r.parts.map((p,i)=>({n:i+1,ans:p.ans,has:p.img?'[image set]':'[no image]',
+        upload:e=>this.upload(r.id,i,e.target.files[0]),
+        setAns:e=>this.act({action:'setAns',id:r.id,part:i,ans:e.target.value}),
+        remove:()=>this.act({action:'delPart',id:r.id,part:i})}))
+    })):[];
+    return {
+      roundLabel:R?R.name+' ('+R.no+'/'+R.total+')':'', statusText:st, clock, board, drawings, rounds,
+      drawNote:R&&R.status==='waiting'?'Drawings appear when the round starts.':'',
+      name:this.state.name, part:this.state.part, mass:this.state.mass, message:this.state.message,
+      showAdmin:this.state.showAdmin, adminBtn:this.state.showAdmin?'Hide organiser':'Organiser',
+      needKey:!adm, authed:!!adm, key:this.state.key, keyMsg:this.state.keyMsg,
+      outList:adm?(adm.out.join(', ')||'none'):'',
+      toggleAdmin:()=>{ const v=!this.state.showAdmin; this.setState({showAdmin:v}); if(v&&this.state.key) this.loadAdmin(); },
+      setKey:e=>{ this.setState({key:e.target.value},()=>this.loadAdmin()); },
+      start:()=>this.act({action:'start'}), stop:()=>this.act({action:'stop'}),
+      reset:()=>confirm('Clear this round\'s scores and reset?')&&this.act({action:'reset'}),
+      eliminate:()=>confirm('Eliminate bottom half of active competitors?')&&this.act({action:'eliminate'}),
+      addRound:()=>this.act({action:'addRound'}),
+      clearAll:()=>confirm('Clear all scores, eliminations and timers?')&&this.act({action:'clearAll'}),
+      setName:e=>this.setState({name:e.target.value}), setPart:e=>this.setState({part:e.target.value}), setMass:e=>this.setState({mass:e.target.value}),
+      submit:async e=>{
+        e.preventDefault();
+        const {name,part,mass}=this.state;
+        try{ const r=await (await fetch('/api/submit',{method:'POST',body:JSON.stringify({name,part,mass})})).json();
+          this.setState({message:r.msg,mass:'',part:''}); this.poll(); }catch(x){ this.setState({message:'Server unreachable.'}); }
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>
